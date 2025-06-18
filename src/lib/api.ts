@@ -127,22 +127,27 @@ export interface BackendProduct {
         }
   
         const data = await response.json();
+        console.log('📦 Raw backend response:', data);
         
-        // Validate response structure
-        if (!data || typeof data.message !== 'string') {
+        // ✅ FIXED: Handle nested response structure from Graduated Search Agent
+        if (!data || !data.response || typeof data.response.response !== 'string') {
+          console.error('❌ Invalid response structure:', data);
           throw new Error('Invalid response format from server');
         }
   
+        // ✅ FIXED: Extract data from nested structure
+        const agentResponse = data.response;
+        
         return {
-          message: data.message,
-          confidence: data.confidence || 'MEDIUM',
-          responseTime: data.responseTime || 0,
-          products: data.products || [],
-          suggestions: data.suggestions || [],
+          message: agentResponse.response,  // Extract nested response
+          confidence: data.mode === "🤖 AI Agent" ? 'HIGH' : 'MEDIUM',
+          responseTime: data.responseTime || agentResponse.processing_time || 0,
+          products: agentResponse.products || [],
+          suggestions: this.extractSuggestions(agentResponse),
           success: true,
-          agentType: data.agentType || 'GraduatedSearchAgent',
-          phase: data.phase,
-          sessionId: sessionId
+          agentType: data.mode || 'GraduatedSearchAgent',
+          phase: agentResponse.search_readiness || agentResponse.category_analysis,
+          sessionId: data.sessionId || sessionId
         };
   
       } catch (error) {
@@ -160,6 +165,30 @@ export interface BackendProduct {
           sessionId: this.getSessionId()
         };
       }
+    }
+  
+    /**
+     * Extract suggestions from agent response
+     */
+    private static extractSuggestions(agentResponse: any): string[] {
+      const suggestions: string[] = [];
+      
+      // Add suggestions based on search readiness
+      if (agentResponse.search_readiness === 'insufficient') {
+        suggestions.push('Proporciona más detalles sobre el producto');
+        suggestions.push('Especifica tu presupuesto');
+      } else if (agentResponse.search_readiness === 'viable') {
+        suggestions.push('¿Necesitas más información sobre algún producto?');
+        suggestions.push('¿Quieres ver productos similares?');
+      }
+      
+      // Add category-specific suggestions
+      if (agentResponse.criteria_analysis?.criticalMissing?.length > 0) {
+        const missing = agentResponse.criteria_analysis.criticalMissing[0];
+        suggestions.push(`¿Podrías especificar el ${missing}?`);
+      }
+      
+      return suggestions.slice(0, 3); // Limit to 3 suggestions
     }
   
     /**
@@ -191,6 +220,9 @@ export interface BackendProduct {
         }
         if (error.message.includes('HTTP 429')) {
           return '❌ Demasiadas consultas. Espera un momento antes de intentar de nuevo.';
+        }
+        if (error.message.includes('Invalid response format')) {
+          return '❌ Respuesta del servidor inválida. Intenta de nuevo.';
         }
       }
       return '❌ Ocurrió un error inesperado. Intenta de nuevo en unos segundos.';
